@@ -19,6 +19,7 @@ import com.stenway.grammarsml.TiAlternative;
 import com.stenway.grammarsml.TiCharsetReference;
 import com.stenway.grammarsml.TiGroup;
 import com.stenway.grammarsml.TiOccurrence;
+import com.stenway.grammarsml.TiString;
 import com.stenway.grammarsml.Token;
 import com.stenway.grammarsml.TokenItem;
 import com.stenway.grammarsml.UnicodeCategory;
@@ -180,6 +181,27 @@ public class ParserGenerator {
 				document.appendLine("return false;");
 				document.close();
 				document.appendLine("offset += lastSubLength;");
+			} else if (item instanceof TiString) {
+				TiString string = (TiString)item;
+				int[] codePoints = string.Value.codePoints().toArray();
+				String codePointStr = "";
+				boolean isFirst = true;
+				for (int codePoint : codePoints) {
+					if (isFirst) {
+						isFirst = false;
+					} else {
+						codePointStr += ", ";
+					}
+					codePointStr += getHexStr(codePoint);
+				}
+				String stringMethod = "isString";
+				if (string.IgnoreCase) {
+					stringMethod = "isCiString";
+				}
+				document.open("if (!("+stringMethod+"(offset, new int[] {"+codePointStr+"}))) ");
+				document.appendLine("return false;");
+				document.close();
+				document.appendLine("offset += "+codePoints.length+";");
 			} else {
 				throw new IllegalStateException("Todo");
 			}
@@ -290,6 +312,32 @@ public class ParserGenerator {
 		
 		document.open("public void resetIndex(int index) ");
 		document.appendLine("this.index = index;");
+		document.close();
+		document.appendLine();
+		
+		document.open("protected boolean isString(int offset, int[] strChars) ");
+		document.open("if (index + offset + strChars.length > chars.length) ");
+		document.appendLine("return false;");
+		document.close();
+		document.open("for (int i=0; i<strChars.length; i++) ");
+		document.open("if (chars[index+offset+i] != strChars[i]) ");
+		document.appendLine("return false;");
+		document.close();
+		document.close();
+		document.appendLine("return true;");
+		document.close();
+		document.appendLine();
+		
+		document.open("protected boolean isCiString(int offset, int[] strChars) ");
+		document.open("if (index + offset + strChars.length > chars.length) ");
+		document.appendLine("return false;");
+		document.close();
+		document.open("for (int i=0; i<strChars.length; i++) ");
+		document.open("if (Character.toLowerCase(chars[index+offset+i]) != Character.toLowerCase(strChars[i])) ");
+		document.appendLine("return false;");
+		document.close();
+		document.close();
+		document.appendLine("return true;");
 		document.close();
 		document.appendLine();
 		
