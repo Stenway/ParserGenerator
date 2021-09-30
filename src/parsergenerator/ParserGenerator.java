@@ -6,10 +6,13 @@ import com.stenway.grammarsml.CiAny;
 import com.stenway.grammarsml.CiCategory;
 import com.stenway.grammarsml.CiChar;
 import com.stenway.grammarsml.CiCharsetReference;
+import com.stenway.grammarsml.CiPreset;
 import com.stenway.grammarsml.CiRange;
 import com.stenway.grammarsml.RiAlternative;
 import com.stenway.grammarsml.RiGroup;
+import com.stenway.grammarsml.RiNot;
 import com.stenway.grammarsml.RiOccurrence;
+import com.stenway.grammarsml.RiRequired;
 import com.stenway.grammarsml.RiRuleReference;
 import com.stenway.grammarsml.RiTokenReference;
 import com.stenway.grammarsml.Rule;
@@ -21,11 +24,15 @@ import com.stenway.grammarsml.TiGroup;
 import com.stenway.grammarsml.TiOccurrence;
 import com.stenway.grammarsml.TiString;
 import com.stenway.grammarsml.Token;
+import com.stenway.grammarsml.TokenCategories;
+import com.stenway.grammarsml.TokenCategory;
 import com.stenway.grammarsml.TokenItem;
 import com.stenway.grammarsml.UnicodeCategory;
 import com.stenway.grammarsml.Utils;
 import com.stenway.reliabletxt.ReliableTxtDocument;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.HashMap;
 
@@ -105,6 +112,17 @@ public class ParserGenerator {
 			} else if (item instanceof CiCategory) {
 				CiCategory itemCategory = (CiCategory)item;
 				result += "Character.getType(c) == Character." + getCategoryCode(itemCategory.Value);
+			} else if (item instanceof CiPreset) {
+				CiPreset preset = (CiPreset)item;
+				if (preset.Value == CiPreset.Letter) {
+					result += "Character.isLetter(c)";
+				} else if (preset.Value == CiPreset.Digit) {
+					result += "Character.isDigit(c)";
+				} else {
+					throw new IllegalStateException("Todo");
+				}
+			} else {
+				throw new IllegalStateException("Todo");
 			}
 			result += ")";
 		}
@@ -310,6 +328,34 @@ public class ParserGenerator {
 		document.close();
 		document.appendLine();
 		
+		document.open("public int[] getChars() ");
+		document.appendLine("return chars;");
+		document.close();
+		document.appendLine();
+		
+		document.appendLine("@Override");
+		document.open("public String toString() ");
+		document.appendLine("if (isEndOfText()) { return \"END OF TEXT\"; }");
+		document.appendLine("int endIndex = Math.min(index+20, chars.length);");
+		document.appendLine("return new String(chars, index, endIndex-index);");
+		document.close();
+		document.appendLine();
+		
+		document.open("public int[] getLineInfo() ");
+		document.appendLine("int lineIndex = 0;");
+		document.appendLine("int linePosition = 0;");
+		document.open("for (int i=0; i<index; i++) ");
+		document.open("if (chars[i] == '\\n') ");
+		document.appendLine("lineIndex++;");
+		document.appendLine("linePosition = 0;");
+		document.closeOpen("} else {");
+		document.appendLine("linePosition++;");
+		document.close();
+		document.close();
+		document.appendLine("return new int[] {lineIndex, linePosition};");
+		document.close();
+		document.appendLine();
+		
 		document.open("public void resetIndex(int index) ");
 		document.appendLine("this.index = index;");
 		document.close();
@@ -391,6 +437,20 @@ public class ParserGenerator {
 		document.close();
 	}
 	
+	private void generateTokenCategoriesEnum() {
+		document.open("enum TokenCategory ");
+		TokenCategory[] categories = grammar.TokenCategories.all();
+		for (int i=0; i<categories.length; i++) {
+			TokenCategory category = categories[i];
+			String comma = "";
+			if (i < categories.length-1) {
+				comma = ",";
+			}
+			document.appendLine(category.Id.toUpperCase()+comma);
+		}
+		document.close();
+	}
+	
 	HashMap<RiGroup, String> lookupRiGroup = new HashMap<>();
 	
 	private void generateRuleSubCode(RiGroup group, Rule rule) {
@@ -399,7 +459,7 @@ public class ParserGenerator {
 		document.open("protected boolean "+name+"(RuleNode parentRuleNode, boolean optional) ");
 		document.appendLine("RuleNode ruleNode = new RuleNode(RuleType."+rule.Id.toUpperCase()+");");
 		
-		generateRiGroupCode(group);
+		generateRiGroupCode(group, rule);
 		
 		document.appendLine("parentRuleNode.addTemp(ruleNode);");
 		document.appendLine("return true;");
@@ -436,6 +496,17 @@ public class ParserGenerator {
 					RiGroup group = (RiGroup)occurance.Item;
 					prepareRuleItems(group.Items);
 				}
+			} else if (item instanceof RiNot) {
+				RiNot not = (RiNot)item;
+				if (!(not.Item instanceof RiGroup)) {
+					RiGroup newGroup = new RiGroup();
+					newGroup.Items.add(not.Item);
+					not.Item = newGroup;
+					prepareRuleItems(newGroup.Items);
+				} else {
+					RiGroup group = (RiGroup)not.Item;
+					prepareRuleItems(group.Items);
+				}
 			}
 		}
 	}
@@ -456,8 +527,10 @@ public class ParserGenerator {
 		document.appendLine();
 		document.open("public boolean parseRule_"+rule.Id+"(boolean optional) ");
 		document.appendLine("RuleNode ruleNode = new RuleNode(RuleType."+rule.Id.toUpperCase()+");");
-		
-		generateRiGroupCode(rule.Group);
+		if (rule == grammar.RootRule) {
+			document.appendLine("RootNode = ruleNode;");
+		}
+		generateRiGroupCode(rule.Group, rule);
 		
 		document.appendLine("lastNode = ruleNode;");
 		document.appendLine("return true;");
@@ -465,13 +538,13 @@ public class ParserGenerator {
 		document.appendLine();
 	}
 	
-	private void generateRiGroupCode(RiGroup group) {
+	private void generateRiGroupCode(RiGroup group, Rule rule) {
 		document.appendLine("int startIndex = iterator.getIndex();");
 		for (RuleItem item : group.Items) {
 			if (item instanceof RiTokenReference) {
 				RiTokenReference tokenReference = (RiTokenReference)item;
 				document.open("if (!iterator.isToken_"+tokenReference.Token.Id+"()) ");
-				document.appendLine("return returnFalseOrThrowException(optional, startIndex, \"Token of type '"+tokenReference.Token.Id.toUpperCase()+"' expected\");");
+				document.appendLine("return returnFalseOrThrowException(optional, startIndex, \"Token of type '"+tokenReference.Token.Id.toUpperCase()+"' expected in rule '"+rule.Id.toUpperCase()+"'\");");
 				document.close();
 				document.appendLine("ruleNode.addToken(TokenType."+tokenReference.Token.Id.toUpperCase()+", iterator.readToken());");
 			} else if (item instanceof RiRuleReference) {
@@ -525,7 +598,16 @@ public class ParserGenerator {
 				String str = lookupRiGroup.get(itemGroup) + "(ruleNode, optional || false)";
 				
 				document.open("if (!("+str+") ");
-				document.appendLine("return returnFalseOrThrowException(optional, startIndex, \"Non optional rule repeat could not be matched\");");
+				document.appendLine("return returnFalseOrThrowException(optional, startIndex, \"Non optional rule group could not be matched\");");
+				document.close();
+			} else if (item instanceof RiRequired) {
+				document.appendLine("optional = false;");
+			} else if (item instanceof RiNot) {
+				RiNot not = (RiNot)item;
+				RiGroup notGroup = (RiGroup)not.Item;
+				String str = lookupRiGroup.get(notGroup) + "(ruleNode";
+				document.open("if ("+str+", true)) ");
+				document.appendLine("return false;");
 				document.close();
 			} else {
 				throw new IllegalStateException();
@@ -539,6 +621,7 @@ public class ParserGenerator {
 			
 		document.appendLine("CharIterator iterator;");
 		document.appendLine("ParserTreeNode lastNode;");
+		document.appendLine("public RuleNode RootNode;");
 		document.appendLine();
 		
 		document.open("public Parser(String content) ");
@@ -546,9 +629,15 @@ public class ParserGenerator {
 		document.close();
 		document.appendLine();
 		
+		document.open("protected ParserException getException(String message) ");
+		document.appendLine("int[] lineInfo = iterator.getLineInfo();");
+		document.appendLine("return new ParserException(message, lineInfo);");
+		document.close();
+		document.appendLine();
+		
 		document.open("protected boolean returnFalseOrThrowException(boolean optional, int startIndex, String message) ");
 		document.open("if (!optional) ");
-		document.appendLine("throw new ParserException(message);");
+		document.appendLine("throw getException(message);");
 		document.close();
 		document.appendLine("iterator.resetIndex(startIndex);");
 		document.appendLine("return false;");
@@ -562,10 +651,10 @@ public class ParserGenerator {
 		document.open("public RuleNode parse() ");
 		document.appendLine("boolean result = parseRule_"+grammar.RootRule.Id+"(false);");
 		document.open("if (!result) ");
-		document.appendLine("throw new ParserException(\"Could not match root rule\");");
+		document.appendLine("throw getException(\"Could not match root rule\");");
 		document.close();
 		document.open("if (!iterator.isEndOfText()) ");
-		document.appendLine("throw new ParserException(\"Text not completely parsed\");");
+		document.appendLine("throw getException(\"Text not completely parsed\");");
 		document.close();
 		document.appendLine("return (RuleNode)lastNode;");
 		document.close();
@@ -578,56 +667,127 @@ public class ParserGenerator {
 		document.close();
 	}
 	
-	private void generateUtilClasses() {
-		document.open("class ParserException extends RuntimeException ");
-		document.open("public ParserException(String message) ");
-		document.appendLine("super(message);");
-		document.close();
-		document.close();
-		document.appendLine();
-		
-		document.open("class ParserTreeNode ");
-		document.close();
-		document.appendLine();
-		
+	private void generateRuleNodeClass() {
 		document.open("class RuleNode extends ParserTreeNode ");
 		document.appendLine("public final RuleType Type;");
 		document.appendLine("public final ArrayList<ParserTreeNode> Children = new ArrayList<>();");
 		document.appendLine();
+		
 		document.open("public RuleNode(RuleType type) ");
 		document.appendLine("Type = type;");
 		document.close();
 		document.appendLine();
+		
 		document.open("public void addToken(TokenType type, int length) ");
 		document.appendLine("Children.add(new Token(type, length));");
 		document.close();
 		document.appendLine();
+		
 		document.open("public void add(ParserTreeNode node) ");
 		document.appendLine("Children.add(node);");
 		document.close();
 		document.appendLine();
+		
 		document.open("public void addTemp(RuleNode node) ");
 		document.open("for (ParserTreeNode child : node.Children) ");
 		document.appendLine("Children.add(child);");
 		document.close();
 		document.close();
-		document.close();
 		document.appendLine();
 		
-		document.open("class Token extends ParserTreeNode ");
-		document.appendLine("public final TokenType Type;");
-		document.appendLine("public final int Length;");
-		document.appendLine();
-		document.open("public Token(TokenType type, int length) ");
-		document.appendLine("Type = type;");
-		document.appendLine("Length = length;");
+		document.appendLine("@Override");
+		document.open("public String toString() ");
+		document.appendLine("return \"Rule \"+Type.name();");
 		document.close();
+		
+		
 		document.close();
 		document.appendLine();
 	}
 	
-	public void generate(String filePath) throws IOException {
-		document.appendLine("package test;");
+	private void generateTokenClass() {
+		document.open("class Token extends ParserTreeNode ");
+		document.appendLine("public final TokenType Type;");
+		document.appendLine("public final int Length;");
+		document.appendLine();
+		
+		document.open("public Token(TokenType type, int length) ");
+		document.appendLine("Type = type;");
+		document.appendLine("Length = length;");
+		document.close();
+		document.appendLine();
+		
+		document.appendLine("@Override");
+		document.open("public String toString() ");
+		document.appendLine("return \"Token \"+Type.name() + \" (\" + Length + \")\";");
+		document.close();
+		
+		document.close();
+		document.appendLine();
+	}
+	
+	private void generateParserExceptionClass() {
+		document.open("class ParserException extends RuntimeException ");
+		
+		document.open("public ParserException(String message) ");
+		document.appendLine("super(message);");
+		document.close();
+		
+		document.open("public ParserException(String message, int[] lineInfo) ");
+		document.appendLine("super(message + \" (Line \" + (lineInfo[0]+1) + \", Char \" + (lineInfo[1]+1) + \")\");");
+		document.close();
+		
+		document.close();
+		document.appendLine();
+	}
+	
+	private void generateTokenUtilsClass() {
+		document.open("class TokenUtils ");
+		
+		document.open("public static TokenCategory getTokenCategory(Token token) ");
+		
+		boolean isFirst = true;
+		for (TokenCategory category : grammar.TokenCategories.all()) {
+			for (Token token : category.Tokens) {
+				String ifStr = "if (token.Type == TokenType."+token.Id.toUpperCase()+") ";
+				if (isFirst) {
+					document.open(ifStr);
+					isFirst = false;
+				} else {
+					document.closeOpen("} else "+ifStr+"{");
+				}
+				String returnStr = "";
+
+				document.appendLine("return TokenCategory."+category.Id.toUpperCase()+";");
+			}
+		}
+		document.close();
+		
+		document.appendLine("return null;");
+		document.close();
+		
+		document.close();
+		document.appendLine();
+	}
+	
+	private void generateUtilClasses() {
+		generateParserExceptionClass();
+		
+		document.open("class ParserTreeNode ");
+		document.close();
+		document.appendLine();
+		
+		generateRuleNodeClass();
+		
+		generateTokenClass();
+		
+		generateTokenUtilsClass();
+		
+		document.appendLine();
+	}
+	
+	public void generate(String packageName, String filePath) throws IOException {
+		document.appendLine("package "+packageName+";");
 		document.appendLine();
 		document.appendLine("import java.util.ArrayList;");
 		document.appendLine();
@@ -641,10 +801,14 @@ public class ParserGenerator {
 		generateRulesEnum();
 		document.appendLine();
 		
+		generateTokenCategoriesEnum();
+		document.appendLine();
+		
 		generateUtilClasses();
 		generateParserClass();
 				
 		String strContent = document.toString();
-		ReliableTxtDocument.save(strContent, filePath);
+		//ReliableTxtDocument.save(strContent, filePath);
+		Files.write( Paths.get(filePath), strContent.getBytes());
 	}
 }

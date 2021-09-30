@@ -51,14 +51,6 @@ public class IndentedStringBuilder {
 		appendLineIndented(content);
 	}
 	
-	
-	/*private void appendLineIfEmpty(int listSize) {
-		if (listSize > 0) return;
-		appendLine();
-		appendLine();
-	}*/
-	
-	
 	public void open(String content) {
 		appendLine(content+openingStr);
 		
@@ -71,6 +63,13 @@ public class IndentedStringBuilder {
 		indentationLevel--;
 		appendLine(closingStr);
 		firstElementIndicators.remove(firstElementIndicators.size()-1);
+	}
+	
+	public void closeOpen(String content) {
+		lastWasEmpty = false;
+		indentationLevel--;
+		appendLine(content);
+		indentationLevel++;
 	}
 
 	@Override
